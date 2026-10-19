@@ -12,6 +12,7 @@
  */
 #include "meos.h"
 #include "meos_util.h"
+#include "gotanda_art.h"
 
 #ifdef __wasm__
 void *memset(void *d, int c, unsigned n) { volatile unsigned char *p = (volatile unsigned char *)d; while (n--) *p++ = (unsigned char)c; return d; }
@@ -650,17 +651,7 @@ static void rect(int x, int y, int w, int h, unsigned c)
     if (y + h > SH) h = SH - y;
     if (w > 0 && h > 0) meos_display_fill(x, y, w, h, c);
 }
-static unsigned short *cv;                                   /* when set, R() draws into this sprite buffer instead of the screen */
-static int cvw, cvh;
-static void bfill(int x, int y, int w, int h, unsigned c)
-{
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > cvw) w = cvw - x;
-    if (y + h > cvh) h = cvh - y;
-    for (int j = 0; j < h; j++) { unsigned short *p = cv + (y + j) * cvw + x; for (int i = 0; i < w; i++) p[i] = (unsigned short)c; }
-}
-static void R(int x, int y, int w, int h, unsigned c) { if (cv) bfill(x, y, w, h, c); else rect(x, y + OY, w, h, c); }
+static void R(int x, int y, int w, int h, unsigned c) { rect(x, y + OY, w, h, c); }
 static void T(int x, int y, int x1, int y1, int x2, int y2, unsigned c) { meos_display_tri(x, y + OY, x1, y1 + OY, x2, y2 + OY, c); }
 
 static void text(int x, int y, const char *s, int n, unsigned fg, unsigned bg, int sc)
@@ -693,201 +684,99 @@ static unsigned floor_color(void)
     }
 }
 
-static void draw_tile(char c, int x, int y, int tx, int ty)
+/* ---------- art: FLUX images, quantised to 16 colours (gotanda_art.h), decoded on first use into RGB565 buffers ---------- */
+
+static unsigned short *heap, *heap_ptr, *heap_end;
+static unsigned floor_key;                                    /* the flat floor colour of the room: transparent pixels are decoded to it */
+
+typedef struct { unsigned short *p; unsigned key; } Slot;
+static Slot slots[NART][2][3];                                /* [art][mirrored][tint] */
+
+static void heap_init(int pages)
 {
-    int h = hash(tx, ty, room);
+#ifdef __wasm__
+    int pg = __builtin_wasm_memory_grow(0, pages);            /* no malloc here: take fresh pages from the host */
+    heap = pg < 0 ? 0 : (unsigned short *)((unsigned)pg * 65536u);
+#else
+    static unsigned short host_heap[200000];
+    heap = host_heap; (void)pages;
+#endif
+    heap_ptr = heap; heap_end = heap ? heap + pages * 32768 : 0;
+}
+
+static unsigned tint565(unsigned c, int tint)
+{
+    int r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
+    if (tint == 1) { r += 12; if (r > 31) r = 31; g >>= 1; b >>= 1; }                          /* red: the boss is about to charge */
+    else if (tint == 2) { int l = (r + (g >> 1) + b) / 3; l = l * 4 / 5 + 4; r = l; g = l * 2; b = l; }   /* grey: stunned */
+    return (unsigned)((r << 11) | (g << 5) | b);
+}
+
+static const unsigned short *get_art(int id, int flip, int tint)
+{
+    if (!heap) return 0;
+    const Art *a = &ARTS[id];
+    Slot *s = &slots[id][flip][tint];
+    unsigned key = a->opaque ? 0u : floor_key;
+    if (!s->p) {
+        unsigned n = (unsigned)a->w * a->h;
+        if (heap_ptr + n > heap_end) return 0;
+        s->p = heap_ptr; heap_ptr += n; s->key = ~0u;
+    }
+    if (s->key != key) {
+        unsigned short pal[16];
+        for (int i = 0; i < 16; i++) pal[i] = (unsigned short)(tint ? tint565(a->pal[i], tint) : a->pal[i]);
+        if (!a->opaque) pal[15] = (unsigned short)floor_key;
+        int w = a->w, h = a->h;
+        const unsigned char *src = a->px;
+        unsigned short *d = s->p;
+        for (int y = 0; y < h; y++) {
+            unsigned short *row = d + y * w;
+            for (int x = 0; x < w; x += 2) {
+                unsigned char v = *src++;
+                if (flip) { row[w - 1 - x] = pal[v >> 4]; row[w - 2 - x] = pal[v & 15]; }
+                else { row[x] = pal[v >> 4]; row[x + 1] = pal[v & 15]; }
+            }
+        }
+        s->key = key;
+    }
+    return s->p;
+}
+
+static void blit_art(int id, int flip, int tint, int x, int y, int scale)      /* (x, y) in screen coordinates */
+{
+    const Art *a = &ARTS[id];
+    if (x < 0 || y < 0 || x + a->w * scale > SW || y + a->h * scale > SH) return;
+    const unsigned short *p = get_art(id, flip, tint);
+    if (p) meos_display_blit(x, y, a->w, a->h, p, scale);
+}
+
+static void draw_tile(char c, int x, int y)
+{
+    int id = -1;
     switch (c) {
-    case 'W':
-        if (room >= 12) {
-            R(x, y, TS, TS, C(70, 50, 66)); R(x, y + 31, TS, 2, C(40, 28, 40)); R(x + 30, y, 2, 32, C(40, 28, 40)); R(x + 14, y + 33, 2, 31, C(40, 28, 40));
-        } else {
-            unsigned neon = h % 3 == 0 ? C(255, 60, 160) : h % 3 == 1 ? C(60, 230, 255) : C(255, 220, 60);
-            R(x, y, TS, TS, C(46, 34, 74));
-            R(x + 8, y + 10, 18, 16, (h & 4) ? C(255, 215, 110) : C(26, 22, 50));
-            R(x + 38, y + 10, 18, 16, (h & 8) ? C(255, 215, 110) : C(26, 22, 50));
-            R(x + 8, y + 34, 18, 12, (h & 16) ? C(255, 215, 110) : C(26, 22, 50));
-            R(x, y + TS - 6, TS, 4, neon);
-        }
-        break;
-    case 'i':
-        T(x + 32, y + 6, x + 12, y + 56, x + 52, y + 56, C(110, 200, 255));
-        T(x + 32, y + 6, x + 32, y + 56, x + 52, y + 56, C(190, 240, 255));
-        R(x + 12, y + 56, 40, 4, C(20, 30, 60));
-        break;
-    case 'b':
-        R(x + 4, y + 6, 56, 54, C(150, 100, 50)); R(x + 4, y + 6, 56, 4, C(90, 55, 20)); R(x + 4, y + 56, 56, 4, C(90, 55, 20));
-        R(x + 4, y + 30, 56, 4, C(90, 55, 20)); R(x + 30, y + 6, 4, 54, C(90, 55, 20));
-        break;
-    case 't': R(x, y + 8, TS, 48, C(120, 76, 40)); R(x, y + 8, TS, 8, C(180, 126, 70)); R(x, y + 56, TS, 4, C(60, 36, 16)); break;
-    case 's': R(x + 18, y + 18, 28, 12, C(200, 60, 70)); R(x + 30, y + 30, 4, 22, C(170, 170, 180)); R(x + 20, y + 52, 24, 4, C(170, 170, 180)); break;
-    case 'o':
-        R(x, y, TS, TS, C(6, 8, 18)); R(x + 6, y + 6, TS - 12, TS - 12, C(12, 20, 44));
-        R(x, y, TS, 4, C(90, 130, 190));
-        break;
-    case 'h':
-        R(x, y, TS, TS, C(6, 8, 18)); R(x + 2, y + 4, TS - 4, TS - 8, C(170, 225, 255));
-        R(x + 2, y + 20, TS - 4, 3, C(110, 170, 220)); R(x + 2, y + 40, TS - 4, 3, C(110, 170, 220));
-        break;
-    case 'L':
-        R(x + 28, y + 24, 8, 36, C(120, 120, 140)); R(x + 18, y + 6, 28, 18, C(255, 230, 120)); R(x + 24, y + 10, 16, 10, C(255, 255, 210));
-        break;
-    case 'D':
-        R(x + 6, y, 52, TS, C(255, 190, 80)); R(x + 14, y + 6, 36, TS - 6, C(60, 36, 14));
-        break;
-    case 'K':
-        R(x, y, TS, TS, C(70, 20, 24));
-        for (int k = 0; k < 4; k++) R(x + 6 + k * 16, y, 6, TS, C(190, 150, 60));
-        R(x, y + 28, TS, 6, C(190, 150, 60));
-        break;
-    case 'c': R(x, y, TS, TS, room == R_CLUB ? C(130, 24, 90) : room == R_BOSS ? C(100, 20, 20) : C(88, 110, 60)); R(x, y, TS, 2, C(200, 160, 60)); R(x, y, 2, TS, C(200, 160, 60)); break;
-    case 'f': R(x + 6, y + 18, 52, 26, C(60, 92, 150)); R(x + 14, y + 24, 20, 6, C(120, 160, 220)); break;
-    default: break;
+    case 'W': id = room >= 12 ? ART_TILE_WALL_INT : ART_TILE_WALL_A + (hash(room, 7, 3) % 3); break;
+    case 'i': id = ART_OBJ_CRYSTAL; break;
+    case 'b': id = ART_OBJ_CRATE; break;
+    case 't': id = ART_OBJ_COUNTER; break;
+    case 's': id = ART_OBJ_STOOL; break;
+    case 'o': id = ART_TILE_HOLE; break;
+    case 'h': id = ART_TILE_BRIDGE; break;
+    case 'L': id = ART_OBJ_LAMP; break;
+    case 'D': id = ART_TILE_DOOR; break;
+    case 'K': id = ART_TILE_GATE; break;
+    case 'f': id = ART_OBJ_PUDDLE; break;
+    default: return;
     }
-}
-
-static void person(int x, int y, int sz, int dir, int stp, unsigned body, unsigned legs, unsigned hair, unsigned skin, unsigned hatc, int shades, int longhair)
-{
-#define S(v) ((v) * sz / 48)
-    R(x + S(12), y + S(34) + (stp ? S(2) : 0), S(10), S(13), legs);
-    R(x + S(26), y + S(34) + (stp ? 0 : S(2)), S(10), S(13), legs);
-    R(x + S(8), y + S(18), S(32), S(20), body);
-    R(x + S(3), y + S(20), S(6), S(15), body); R(x + S(39), y + S(20), S(6), S(15), body);
-    if (longhair) R(x + S(8), y + S(6), S(32), S(30), hair);
-    R(x + S(12), y + S(2), S(24), S(19), dir == UP ? hair : skin);
-    R(x + S(12), y + S(2), S(24), S(6), hair);
-    if (dir != UP) {
-        if (shades) {
-            unsigned lens = shades == 2 ? C(70, 230, 255) : C(10, 10, 14);
-            if (dir == DOWN) { R(x + S(14), y + S(9), S(9), S(6), lens); R(x + S(25), y + S(9), S(9), S(6), lens); R(x + S(22), y + S(10), S(4), S(2), lens); }
-            else R(x + (dir == LEFT ? S(12) : S(20)), y + S(9), S(16), S(6), lens);
-        } else {
-            if (dir == DOWN) { R(x + S(17), y + S(11), S(4), S(4), C(0, 0, 0)); R(x + S(28), y + S(11), S(4), S(4), C(0, 0, 0)); }
-            else R(x + (dir == LEFT ? S(14) : S(30)), y + S(11), S(4), S(4), C(0, 0, 0));
-        }
-    }
-    if (hatc) { R(x + S(8), y + S(3), S(32), S(4), hatc); R(x + S(14), y - S(3), S(20), S(8), hatc); }
-#undef S
-}
-
-static void draw_cat(int x, int y)
-{
-    R(x, y + 8, 40, 22, C(255, 255, 255));                       /* body */
-    R(x + 6, y + 8, 12, 10, C(240, 70, 30)); R(x + 24, y + 14, 12, 12, C(30, 30, 36)); R(x + 14, y + 20, 10, 8, C(240, 70, 30));
-    R(x + 34, y, 18, 18, C(255, 255, 255)); R(x + 38, y + 2, 10, 6, C(240, 70, 30));       /* head */
-    T(x + 34, y + 2, x + 38, y - 8, x + 42, y + 2, C(30, 30, 36)); T(x + 46, y + 2, x + 50, y - 8, x + 52, y + 2, C(240, 70, 30));
-    R(x + 42, y + 8, 3, 3, C(0, 0, 0)); R(x + 48, y + 8, 3, 3, C(0, 0, 0));
-    R(x - 10, y + 10, 12, 5, C(255, 255, 255)); R(x - 10, y + 10, 5, 5, C(30, 30, 36));     /* tail */
-    R(x + 4, y + 28, 6, 8, C(255, 255, 255)); R(x + 30, y + 28, 6, 8, C(255, 255, 255));
+    blit_art(id, 0, 0, x, y + OY, 1);
 }
 
 static void draw_npc(int i)
 {
+    static const unsigned char ids[] = { ART_NPC_CLIENT, ART_NPC_BARTENDER, ART_NPC_MAMA, ART_NPC_ASTRO, ART_NPC_DOCK, ART_NPC_INFORMANT, ART_NPC_VENDOR, ART_NPC_TERMINAL, ART_NPC_CAT };
     int nx, ny;
     if (!npc_rect(i, &nx, &ny)) return;
-    int x = nx - 0, y = ny - 4;
-    switch (NPCS[i].t) {
-    case N_CLIENT: person(x, y, 48, DOWN, 0, C(235, 130, 175), C(120, 60, 90), C(90, 40, 110), C(255, 214, 180), 0, 0, 1); break;
-    case N_BARTENDER: person(x, y, 48, DOWN, 0, C(240, 240, 240), C(30, 30, 40), C(30, 24, 20), C(240, 190, 150), 0, 0, 0); R(x + 20, y + 20, 8, 5, C(220, 30, 40)); break;
-    case N_MAMA: person(x, y, 48, DOWN, 0, C(150, 60, 200), C(100, 40, 140), C(250, 215, 90), C(255, 214, 180), 0, 0, 1); break;
-    case N_ASTRO: person(x, y, 48, LEFT, 0, C(150, 150, 170), C(80, 80, 100), C(240, 240, 245), C(240, 200, 170), 0, 0, 0); break;
-    case N_DOCK: person(x, y, 48, DOWN, 0, C(240, 140, 30), C(50, 60, 90), C(40, 30, 20), C(220, 170, 130), C(250, 220, 40), 0, 0); break;
-    case N_INFORMANT: person(x, y, 48, DOWN, 0, C(70, 74, 86), C(40, 40, 50), C(30, 30, 30), C(230, 190, 150), C(110, 110, 120), 1, 0); break;
-    case N_VENDOR: person(x, y, 48, DOWN, 0, C(250, 250, 250), C(60, 60, 80), C(30, 20, 20), C(240, 190, 150), C(220, 40, 40), 0, 0); break;
-    case N_TERMINAL:
-        R(x, y + 4, 48, 48, C(50, 56, 80)); R(x + 6, y + 10, 36, 24, C(10, 40, 50)); R(x + 10, y + 14, 28, 3, C(60, 255, 200)); R(x + 10, y + 22, 20, 3, C(60, 255, 200));
-        R(x + 10, y + 38, 8, 6, C(255, 80, 80));
-        break;
-    case N_CAT:
-        R(x - 6, y - 4, 60, 56, C(40, 30, 40));
-        draw_cat(x - 2, y + 6);
-        for (int k = 0; k < 6; k++) R(x - 6 + k * 11, y - 4, 4, 56, C(200, 190, 80));
-        break;
-    default: break;
-    }
-}
-
-/* ---- characters: pre-rendered into RGB565 buffers (keyed to the flat floor colour) and drawn with ONE blit each ---- */
-enum { K_PLAYER, K_DRUNK, K_YAKUZA, K_HOSTESS, K_BOSS, K_BOSS_T, K_BOSS_S, NKIND };
-typedef struct { unsigned short *p; unsigned key; short w, h; } Spr;
-static Spr spr[NKIND][4][2];
-static unsigned short *heap;
-static unsigned floor_key;
-
-static void paint_kind(int kind, int dir, int step, int x, int y)       /* draws one character with its top-left at (x, y) */
-{
-    switch (kind) {
-    case K_PLAYER:
-        person(x + 2, y + 4, 36, dir, step, C(180, 140, 90), C(60, 56, 70), C(50, 40, 40), C(240, 195, 155), C(80, 70, 80), 2, 0);
-        break;
-    case K_DRUNK:
-        person(x + 2, y + 4, 40, dir, step, C(110, 150, 90), C(70, 70, 100), C(70, 40, 20), C(255, 150, 140), 0, 0, 0);
-        R(x + 33, y + 24, 5, 12, C(60, 190, 80)); R(x + 34, y + 21, 3, 4, C(60, 190, 80));
-        break;
-    case K_YAKUZA:
-        person(x + 2, y + 4, 40, dir, step, C(26, 26, 34), C(20, 20, 26), C(10, 10, 10), C(235, 190, 150), 0, 1, 0);
-        R(x + 20, y + 22, 5, 12, C(210, 30, 40));
-        break;
-    case K_HOSTESS:
-        person(x + 2, y + 4, 40, dir, step, C(245, 90, 170), C(200, 60, 130), C(250, 215, 90), C(255, 214, 180), 0, 0, 1);
-        R(x + 28, y + 6, 5, 5, C(255, 60, 60));
-        break;
-    default: {
-        unsigned body = kind == K_BOSS_T ? C(255, 60, 40) : kind == K_BOSS_S ? C(120, 120, 160) : C(40, 20, 50);
-        person(x + 2, y + 4, 60, DOWN, step, body, C(20, 20, 26), C(20, 20, 20), C(235, 190, 150), 0, 1, 0);
-        R(x + 16, y + 38, 32, 5, C(60, 200, 90)); R(x + 20, y + 43, 24, 5, C(60, 200, 90)); R(x + 25, y + 48, 14, 5, C(60, 200, 90));      /* dragon tattoo */
-        break; }
-    }
-}
-
-static void sprite_init(void)
-{
-    static const short size[NKIND] = { 40, 44, 44, 44, 64, 64, 64 };
-    int bytes = 0;
-    for (int k = 0; k < NKIND; k++) for (int d = 0; d < (k >= K_BOSS ? 1 : 4); d++) for (int st = 0; st < 2; st++) bytes += size[k] * size[k] * 2;
-    int pages = (bytes + 65535) / 65536;
-#ifdef __wasm__
-    int pg = __builtin_wasm_memory_grow(0, pages);
-    heap = pg < 0 ? 0 : (unsigned short *)((unsigned)pg * 65536u);
-#else
-    static unsigned short host_heap[100000];
-    (void)pages; heap = host_heap;
-#endif
-    if (!heap) return;
-    unsigned short *p = heap;
-    for (int k = 0; k < NKIND; k++) for (int d = 0; d < (k >= K_BOSS ? 1 : 4); d++) for (int st = 0; st < 2; st++) {
-        Spr *s = &spr[k][d][st];
-        s->p = p; s->w = s->h = size[k]; s->key = ~0u; p += size[k] * size[k];
-    }
-}
-
-static Spr *get_sprite(int kind, int dir, int step)
-{
-    if (!heap) return 0;
-    if (kind >= K_BOSS) dir = 0;
-    Spr *s = &spr[kind][dir][step];
-    if (s->key != floor_key) {                               /* (re)render against the current floor colour: only when the floor colour changed */
-        cv = s->p; cvw = s->w; cvh = s->h;
-        bfill(0, 0, cvw, cvh, floor_key);
-        paint_kind(kind, dir, step, 0, 0);
-        cv = 0; s->key = floor_key;
-    }
-    return s;
-}
-
-static int plain_floor(int x, int y, int w, int h)           /* the rectangle lies on bare floor inside the room */
-{
-    if (x < 0 || y < 0 || x + w > SW || y + h > RH * TS) return 0;
-    for (int ty = y / TS; ty <= (y + h - 1) / TS; ty++) for (int tx = x / TS; tx <= (x + w - 1) / TS; tx++) if (rm[room][ty][tx] != '.') return 0;
-    return 1;
-}
-
-static void draw_character(int kind, int dir, int step, int x, int y, int size)
-{
-    if (plain_floor(x, y, size, size)) {
-        Spr *s = get_sprite(kind, dir, step);
-        if (s) { meos_display_blit(x, y + OY, size, size, s->p, 1); return; }
-    }
-    paint_kind(kind, dir, step, x, y);                        /* off the plain floor (doors, bridges, room edges): slower, with fills */
+    blit_art(ids[NPCS[i].t], 0, 0, NPCS[i].x * TS + 8, NPCS[i].y * TS + OY, 1);     /* 48x64, standing on the bottom edge of its tile */
 }
 
 /* ---- the dynamic layer: whatever moves is erased by repainting the map cells under its previous rectangle ---- */
@@ -898,17 +787,23 @@ static unsigned char dirty[RH][RW];
 
 static void note(int x, int y, int w, int h) { if (nd < 40) { drawn[nd].x = (short)x; drawn[nd].y = (short)y; drawn[nd].w = (short)w; drawn[nd].h = (short)h; nd++; } }
 
+static int cell_busy(int tx, int ty)                          /* something other than bare floor is drawn in this cell */
+{
+    if (tx < 0 || ty < 0 || tx >= RW || ty >= RH) return 1;
+    if (rm[room][ty][tx] != '.') return 1;
+    for (unsigned i = 0; i < sizeof(NPCS) / sizeof(NPCS[0]); i++) if (NPCS[i].r == room && NPCS[i].x == tx && NPCS[i].y == ty) return 1;
+    for (unsigned i = 0; i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) if (ITEMS[i].r == room && ITEMS[i].x == tx && ITEMS[i].y == ty && !(got >> i & 1)) return 1;
+    return 0;
+}
+
 static void draw_cell(int tx, int ty)
 {
     R(tx * TS, ty * TS, TS, TS, floor_key);
-    char c = rm[room][ty][tx];
-    if (c != '.') draw_tile(c, tx * TS, ty * TS, tx, ty);
+    draw_tile(rm[room][ty][tx], tx * TS, ty * TS);
     for (unsigned i = 0; i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) {
         const Item *it = &ITEMS[i];
         if (it->r != room || it->x != tx || it->y != ty || (got >> i & 1)) continue;
-        int x = tx * TS, y = ty * TS;
-        if (it->t == 0) { R(x + 10, y + 12, 18, 14, C(255, 70, 100)); R(x + 32, y + 12, 18, 14, C(255, 70, 100)); R(x + 10, y + 22, 40, 12, C(255, 70, 100)); T(x + 10, y + 32, x + 50, y + 32, x + 30, y + 54, C(255, 70, 100)); R(x + 16, y + 16, 6, 6, C(255, 200, 210)); }
-        else { R(x + 14, y + 26, 36, 12, C(255, 255, 255)); R(x + 18, y + 26, 10, 12, C(240, 70, 30)); R(x + 34, y + 26, 10, 12, C(30, 30, 36)); }
+        blit_art(it->t == 0 ? ART_ICON_HEART_BIG : ART_ICON_FUR, 0, 0, tx * TS + 12, ty * TS + 12 + OY, 1);
     }
     for (unsigned i = 0; i < sizeof(NPCS) / sizeof(NPCS[0]); i++) if (NPCS[i].r == room && NPCS[i].x == tx && NPCS[i].y == ty) draw_npc((int)i);
 }
@@ -917,12 +812,7 @@ static void paint_room(void)
 {
     floor_key = floor_color();
     rect(0, OY, SW, SH - OY, floor_key);
-    for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) {
-        int busy = rm[room][ty][tx] != '.';
-        for (unsigned i = 0; !busy && i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) if (ITEMS[i].r == room && ITEMS[i].x == tx && ITEMS[i].y == ty && !(got >> i & 1)) busy = 1;
-        for (unsigned i = 0; !busy && i < sizeof(NPCS) / sizeof(NPCS[0]); i++) if (NPCS[i].r == room && NPCS[i].x == tx && NPCS[i].y == ty) busy = 1;
-        if (busy) draw_cell(tx, ty);
-    }
+    for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) if (cell_busy(tx, ty)) draw_cell(tx, ty);
 }
 
 static void erase_dynamic(void)
@@ -940,23 +830,41 @@ static void erase_dynamic(void)
     for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) if (dirty[ty][tx]) { dirty[ty][tx] = 0; draw_cell(tx, ty); }
 }
 
+/* A character sprite is taller than its hit box (the head sticks out above it).  Rows that would cover a wall, an object or an
+   NPC in the cells above are cropped off, so the transparent (floor-coloured) pixels never wipe something out. */
+static void draw_character(int base, int dir, int tint, int x, int y, int hit_h, int bob)
+{
+    const Art *a = &ARTS[base];
+    int id = dir == UP ? base + 1 : dir == DOWN ? base : base + 2, flip = dir == LEFT;
+    int ytop = y - (a->h - hit_h) - bob, cut = 0;
+    for (int ty = ytop < 0 ? 0 : ytop / TS; ty <= (y - 1) / TS; ty++)
+        for (int tx = x / TS; tx <= (x + a->w - 1) / TS; tx++)
+            if (cell_busy(tx, ty) && (ty + 1) * TS - ytop > cut) cut = (ty + 1) * TS - ytop;
+    if (ytop + cut < 0) cut = -ytop;
+    if (cut > y - ytop) cut = y - ytop;
+    note(x, ytop, a->w, a->h);
+    if (x < 0 || x + a->w > SW || ytop + cut < 0) return;
+    int rows = a->h - cut;
+    if (ytop + cut + OY + rows > SH) rows = SH - (ytop + cut + OY);       /* leaving through the bottom edge: draw what is still on the screen */
+    if (rows <= 0) return;
+    const unsigned short *p = get_art(id, flip, tint);
+    if (p) meos_display_blit(x, ytop + cut + OY, a->w, rows, p + cut * a->w, 1);
+}
+
 static void draw_enemy(Enemy *e)
 {
     int d = e->type == T_BOSS ? DOWN : (iabs(px - e->x) > iabs(py - e->y) ? (px < e->x ? LEFT : RIGHT) : (py < e->y ? UP : DOWN));
-    int stp = (tick >> 3) & 1;
     if (e->hurt > 0 && (tick & 1)) { R(e->x, e->y, e->sz, e->sz, C(255, 255, 255)); note(e->x, e->y, e->sz, e->sz); return; }
-    int kind = e->type == T_DRUNK ? K_DRUNK : e->type == T_YAKUZA ? K_YAKUZA : e->type == T_HOSTESS ? K_HOSTESS :
-               e->state == 1 && (tick & 2) ? K_BOSS_T : e->state == 3 ? K_BOSS_S : K_BOSS;
-    draw_character(kind, d, stp, e->x, e->y, e->sz);
-    note(e->x, e->y, e->sz, e->sz);
-    if (e->type == T_BOSS && e->state == 1) { R(e->x + 24, e->y - 24, 16, 14, C(255, 230, 60)); note(e->x + 24, e->y - 24, 16, 14); }
+    int base = e->type == T_DRUNK ? ART_DRUNK_D : e->type == T_YAKUZA ? ART_YAKUZA_D : e->type == T_HOSTESS ? ART_HOSTESS_D : ART_BOSS_D;
+    int tint = e->type == T_BOSS ? (e->state == 1 && (tick & 2) ? 1 : e->state == 3 ? 2 : 0) : 0;
+    draw_character(base, d, tint, e->x, e->y, e->sz, e->type == T_BOSS ? 0 : (tick >> 3) & 1);
+    if (e->type == T_BOSS && e->state == 1) { R(e->x + 24, e->y - 40, 16, 14, C(255, 230, 60)); note(e->x + 24, e->y - 40, 16, 14); }
 }
 
 static void draw_player(void)
 {
-    if (inv_t > 0 && (tick & 2)) { note(px, py, PS, PS); return; }
-    draw_character(K_PLAYER, face, (step >> 2) & 1, px, py, PS);
-    note(px, py, PS, PS);
+    if (inv_t > 0 && (tick & 2)) { note(px, py - 16, PS, PS + 16); return; }
+    draw_character(ART_PLAYER_D, face, 0, px, py, PS, hold_t > 0 ? (step >> 2) & 1 : 0);
     if (shield_t > 0) {
         int x = px - 4, y = py - 10;
         int fx = face == LEFT ? x - 12 : face == RIGHT ? x + 30 : x + 10, fy = face == UP ? y - 6 : y + 14;
@@ -1014,11 +922,8 @@ static void render_world(void)
     else erase_dynamic();
     for (int i = 0; i < MAXD; i++) {
         if (!dr[i].alive) continue;
-        int x = dr[i].x, y = dr[i].y;
-        if (dr[i].kind == 0) { R(x + 4, y + 2, 20, 24, C(255, 210, 40)); R(x + 8, y + 6, 12, 16, C(255, 240, 140)); }
-        else if (dr[i].kind == 1) { R(x + 2, y + 4, 10, 8, C(255, 70, 100)); R(x + 14, y + 4, 10, 8, C(255, 70, 100)); R(x + 2, y + 10, 22, 8, C(255, 70, 100)); T(x + 2, y + 16, x + 24, y + 16, x + 13, y + 28, C(255, 70, 100)); }
-        else { R(x + 2, y + 8, 24, 16, C(170, 180, 200)); R(x + 6, y + 12, 16, 4, C(230, 240, 255)); }
-        note(x, y, 28, 28);
+        blit_art(dr[i].kind == 0 ? ART_ICON_COIN : dr[i].kind == 1 ? ART_ICON_HEART : ART_ICON_METAL, 0, 0, dr[i].x, dr[i].y + OY, 1);
+        note(dr[i].x, dr[i].y, 28, 28);
     }
     for (int i = 0; i < MAXP; i++) if (pr[i].alive) { R(pr[i].x, pr[i].y, 20, 20, C(255, 80, 180)); R(pr[i].x + 5, pr[i].y + 5, 10, 10, C(255, 200, 230)); note(pr[i].x, pr[i].y, 20, 20); }
     for (int i = 0; i < MAXE; i++) if (en[i].alive) draw_enemy(&en[i]);
@@ -1082,14 +987,17 @@ static void draw_title(void)
         for (int i = 0; i < 40; i++) { int h = hash(i, 3, 9); rect((h * 7) % SW, (h * 13) % 380, 3, 3, C(220, 220, 255)); }
         rect(900, 60, 280, 280, C(230, 170, 110)); rect(920, 120, 240, 30, C(200, 120, 70)); rect(910, 200, 260, 24, C(250, 210, 160));   /* Jupiter */
         for (int i = 0; i < 9; i++) { int bh = 120 + hash(i, 1, 1) % 160; rect(i * 150 - 20, 500 - bh, 130, bh + 220, C(26 + i % 3 * 6, 20, 56)); rect(i * 150 - 20, 500 - bh, 130, 6, i % 2 ? C(255, 60, 160) : C(60, 230, 255)); for (int w = 0; w < bh / 40; w++) rect(i * 150 + 4, 520 - bh + w * 40, 18, 14, (hash(i, w, 5) & 1) ? C(255, 215, 110) : C(26, 22, 50)); }
-        rect(0, 640, SW, 80, C(34, 44, 78)); rect(0, 640, SW, 4, C(255, 60, 160));
+        rect(0, 520, SW, 200, C(34, 44, 78)); rect(0, 520, SW, 4, C(255, 60, 160));
         rect(0, 96, SW, 200, bg); rect(0, 96, SW, 3, C(255, 60, 160)); rect(0, 293, SW, 3, C(60, 230, 255));
-        rect(0, 410, SW, 130, bg);
+        rect(0, 410, SW, 108, bg);
         center(110, "SECTOR HEAVEN", C(255, 255, 255), bg, 8);
         center(200, "五反田三郎の事件簿 ー ヤシキ猫を探せ ー", C(255, 230, 80), bg, 3);
         center(268, "木星の衛星エウロパ ゴールデン街", C(160, 200, 255), bg, 2);
-        paint_kind(K_PLAYER, DOWN, 0, 600, 560); draw_cat(700, 590);
-        center(490, "矢印/WASD:移動  Space:話す・攻撃  1/2/3:アルテミス変形  H:ヒント  Q:終了", C(200, 200, 230), bg, 2);
+        floor_key = C(34, 44, 78);
+        static const unsigned char cast[] = { ART_PLAYER_D, ART_YAKUZA_D, ART_HOSTESS_D, ART_DRUNK_D, ART_BOSS_D };
+        for (int i = 0; i < 5; i++) { const Art *a = &ARTS[cast[i]]; int w = a->w * 2; blit_art(cast[i], 0, 0, 100 + i * 210 + (180 - w) / 2, 712 - a->h * 2, 2); }
+        blit_art(ART_NPC_CAT_FREE, 0, 0, 1180, 712 - 128, 2);
+        center(470, "矢印/WASD:移動  Space:話す・攻撃  1/2/3:アルテミス変形  H:ヒント  Q:終了", C(200, 200, 230), bg, 2);
     }
     center(420, "PRESS ENTER", ((tick >> 4) & 1) ? C(255, 255, 255) : bg, bg, 4);
 }
@@ -1103,7 +1011,8 @@ static void draw_clear(void)
         for (int i = 0; i < 60; i++) { int h = hash(i, 7, 2); rect((h * 7) % SW, (h * 13) % SH, 3, 3, C(220, 220, 255)); }
         center(180, "THE END", C(255, 255, 255), bg, 8);
         center(290, "五反田三郎の事件簿 第一話「ヤシキ猫を探せ」 完", C(255, 230, 80), bg, 3);
-        draw_cat(600, 400);
+        floor_key = bg;
+        blit_art(ART_PLAYER_D, 0, 0, 440, 400, 3); blit_art(ART_NPC_CAT_FREE, 0, 0, 640, 400, 3); blit_art(ART_NPC_CLIENT, 0, 0, 820, 400, 3);
     }
     center(540, "PRESS ENTER", ((tick >> 4) & 1) ? C(200, 200, 230) : bg, bg, 3);
 }
@@ -1116,7 +1025,7 @@ void _start(void)
     meos_display_clip(0, 0, SW, SH);
     unsigned last = meos_uptime_ms(), prev = last;
     int acc = 0;
-    sprite_init();
+    heap_init(5);
     build();
     state = S_TITLE; state_t = 0; room = R_PLAZA;
 #ifdef DEBUG_ROOM

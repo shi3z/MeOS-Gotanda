@@ -1,2 +1,4 @@
 /gotanda.wasm
 shots/
+assets/raw/
+__pycache__/

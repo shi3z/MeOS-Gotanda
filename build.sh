@@ -7,7 +7,7 @@ SDK=${SDK:-$HERE/../meos-sdk-src}
 PY=${PY:-python3}
 $PY -m ziglang cc --target=wasm32-freestanding -mcpu=mvp -nostdlib -O2 -s -ffreestanding -Wall -Wextra -Wno-unused-function \
     $CFLAGS_EXTRA -I"$SDK/include" -Wl,--no-entry -Wl,--export=_start -Wl,-z,stack-size=8192 \
-    -Wl,--initial-memory=65536 -Wl,--max-memory=16777216 -o "${OUT:-$HERE/gotanda.wasm}" "$HERE/gotanda.c"
+    -Wl,--initial-memory=131072 -Wl,--max-memory=16777216 -o "${OUT:-$HERE/gotanda.wasm}" "$HERE/gotanda.c"
 $PY -I - "${OUT:-$HERE/gotanda.wasm}" "$HERE/gotanda.manifest" <<'PYEOF'
 import sys
 def leb(n):

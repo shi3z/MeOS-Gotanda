@@ -29,7 +29,7 @@ A top-down detective adventure for MeOS on the M5Stack Tab5, built with the [MeO
 QR には `.wasm` の SHA-256 が入っているので、Tab5 はこのファイルと一致するものだけをインストールします。
 リンクで入れる場合: `install https://raw.githubusercontent.com/shi3z/MeOS-Gotanda/main/dist/gotanda.wasm`
 
-必要な権限は `C`（コンソール）と `D`（画面）だけ。サイズは約 39 KB、メモリは 512 KB（キャラクター用のスプライトバッファに約 190 KB 使います）です。
+必要な権限は `C`（コンソール）と `D`（画面）だけ。サイズは約 105 KB、メモリは 512 KB（アートのデータ 約 80 KB と、デコードしたスプライト用バッファ 約 300 KB）です。
 
 ## 操作
 
@@ -68,11 +68,31 @@ QR には `.wasm` の SHA-256 が入っているので、Tab5 はこのファイ
 
 ![club](docs/club.png)
 
+![boss](docs/boss.png)
+
 屋台のおでん（50 円）で体力が全回復します。体力は赤いハート（半分単位）、ゲームオーバーでも進行状況は保たれ、広場からやり直せます。
 
 ネタバレを避けるため詳細は書きませんが、依頼人に会うところから始まり、バー → クラブ → 黒龍会 の順に手がかりをたどります。迷ったら **H** を押してください。
 
 ![office](docs/office.png)
+
+## グラフィックス
+
+キャラクター、背景、アイテムの絵はすべて **FLUX.2 [klein] 4B** で生成した画像を、16 色のドット絵に落とし込んだものです。
+
+- 主人公・敵・ボスは、正面を生成したあと、**参照画像つきの編集**で背面と横向きを作り、同じキャラクターとしてそろえています（左向きは右向きの反転）。
+- 壁は窓のグリッドの絵から、周期を検出して継ぎ目なく並ぶ 64×64 に切り出しています。
+- 生成 → 背景除去（外周からの塗りつぶし）→ 縮小 → 16 色化 → 4bpp で `gotanda_art.h` に埋め込み、の流れは `assets/` にあります。
+
+```sh
+# FLUX.2 klein のサーバー (titan の RTX 3090) へトンネルを張って生成
+ssh -f -N -L 8501:127.0.0.1:8501 shi3z@titan
+python3 assets/gen_chars.py          # キャラクター (正面 + 背面/横向き)
+python3 assets/gen_tiles.py          # タイル・オブジェクト・アイコン
+python3 assets/build_assets.py --preview assets/raw   # -> gotanda_art.h と確認用の一覧画像
+```
+
+生成した元画像 (`assets/raw/`, 約 80 MB) はリポジトリに含めていません。`gotanda_art.h` だけでビルドできます。
 
 ## ビルド
 
@@ -80,11 +100,11 @@ QR には `.wasm` の SHA-256 が入っているので、Tab5 はこのファイ
 git clone https://github.com/shi3z/MeOS-app-sdk
 git clone https://github.com/shi3z/MeOS-Gotanda && cd MeOS-Gotanda
 
-# 通常: SDK のビルドスクリプト (clang + lld + llvm が必要)
-../MeOS-app-sdk/tools/meos-build gotanda.c dist/gotanda.wasm
-
-# clang が無い場合: pip 版 Zig を使う build.sh
+# pip 版 Zig を使う build.sh (clang 不要)
 pip install ziglang && SDK=../MeOS-app-sdk ./build.sh
+
+# SDK の tools/meos-build を使う場合: アートのデータが 64 KB を超えるため、
+# スクリプト内の -Wl,--initial-memory=65536 を 131072 に変えてください
 
 # QR コードの再生成 (wasm を作り直すとハッシュが変わります)
 pip install qrcode pillow
@@ -105,11 +125,12 @@ SDK=../MeOS-app-sdk python devtools/jpshot.py gotanda.c --frames 60 --shot 59 --
 
 ## 実装メモ
 
-- `gotanda.c` 1 ファイル。HUD 80 px + 20×10 タイル（64 px）の画面切り替え式。マップは起動時に小さな命令表から組み立てます。
+- `gotanda.c` 1 ファイル + `gotanda_art.h`（生成物）。HUD 80 px + 20×10 タイル（64 px）の画面切り替え式。マップは起動時に小さな命令表から組み立てます。
+- アートは 16 色パレット + 4bpp で埋め込み、初めて使うときに RGB565 バッファへデコードします（`memory.grow` で確保した領域）。`blit` には透過が無いため、透過色は部屋の床色にデコードします。
+  キャラクターの絵は当たり判定より上に頭がはみ出すので、その上のマスに壁・物・NPC があるときは、はみ出し部分を切り取って描きます。
 - **描画は差分だけ**: 部屋の背景（床・建物・NPC・アイテム）は入室時に一度だけ描きます。毎フレームは、動くものの下のマスだけを描き直し、キャラクターを重ねます。
-  1 フレームの描画呼び出しは約 16 回、ピクセル量は約 5 万（以前は約 440 回・130 万）です。
-- **キャラクターは 1 回の `blit`**: 起動時にスプライトを RGB565 バッファへ描いておき（`memory.grow` で確保）、床の色に合わせて遅延生成します。`blit` には透過が無いので、床は部屋ごとのべた塗りにしています。
-  ドアや橋の上など、床以外にかかるときだけ `fill` で描く低速パスに切り替えます。
+  1 フレームの描画呼び出しは約 20 回、ピクセル量は約 7 万（以前は約 440 回・130 万）です。
+- **キャラクターは 1 回の `blit`**: 床は部屋ごとのべた塗りにして、スプライトをその色に合わせてデコードしておきます。
 - ゲームの進行は実時間の 30 ステップ/秒に固定されているので、描画が遅れても速度は落ちず、コマ落ちするだけです。
 - 30 fps 目標、ダブルバッファ。画面外にはみ出す `fill` は拒否されるため `rect()` でクリップしています。
 - 会話は 1 行 34 文字以内・3 行まで。日本語は 1 文字 = 1 セル（`scale` 4 で 32 px）で描画します。
@@ -126,4 +147,4 @@ a quantum intelligence that takes the shape of his sunglasses and can become any
 
 ## License
 
-（未設定）"The Legend of Zelda" is a trademark of Nintendo; this is an original game that borrows the top-down room-by-room adventure style. All code and graphics are original.
+画像は FLUX.2 [klein] 4B で生成しています（モデルのライセンスを公開前に確認してください）。（未設定）"The Legend of Zelda" is a trademark of Nintendo; this is an original game that borrows the top-down room-by-room adventure style. All code and graphics are original.
