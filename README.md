@@ -27,7 +27,7 @@ A top-down detective adventure for MeOS on the M5Stack Tab5, built with the [MeO
 4. `gotanda` と入力して起動
 
 QR には `.wasm` の SHA-256 が入っているので、Tab5 はこのファイルと一致するものだけをインストールします。
-リンクで入れる場合: `install https://raw.githubusercontent.com/shi3z/MeOS-SectorHeaven/main/dist/gotanda.wasm`
+リンクで入れる場合: `install https://raw.githubusercontent.com/shi3z/MeOS-Gotanda/main/dist/gotanda.wasm`
 
 必要な権限は `C`（コンソール）と `D`（画面）だけ。サイズは約 48 KB、メモリは 256 KB です。
 
@@ -78,7 +78,7 @@ QR には `.wasm` の SHA-256 が入っているので、Tab5 はこのファイ
 
 ```sh
 git clone https://github.com/shi3z/MeOS-app-sdk
-git clone https://github.com/shi3z/MeOS-SectorHeaven && cd MeOS-SectorHeaven
+git clone https://github.com/shi3z/MeOS-Gotanda && cd MeOS-Gotanda
 
 # 通常: SDK のビルドスクリプト (clang + lld + llvm が必要)
 ../MeOS-app-sdk/tools/meos-build gotanda.c dist/gotanda.wasm
@@ -88,7 +88,7 @@ pip install ziglang && SDK=../MeOS-app-sdk ./build.sh
 
 # QR コードの再生成 (wasm を作り直すとハッシュが変わります)
 pip install qrcode pillow
-../MeOS-app-sdk/tools/mkqr.py https://raw.githubusercontent.com/shi3z/MeOS-SectorHeaven/main/dist/gotanda.wasm dist/gotanda.wasm -o gotanda_qr.png
+../MeOS-app-sdk/tools/mkqr.py https://raw.githubusercontent.com/shi3z/MeOS-Gotanda/main/dist/gotanda.wasm dist/gotanda.wasm -o gotanda_qr.png
 ```
 
 ### 日本語入りスクリーンショット
