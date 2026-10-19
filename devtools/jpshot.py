@@ -43,17 +43,32 @@ if os.path.exists(log):
         f, x, y, sc, fg, bg, hx = l.split()
         entries.append((int(f), int(x), int(y), int(sc), int(fg), int(bg), bytes.fromhex(hx).decode("utf-8", "replace")))
 def rgb(p): return (((p >> 11) & 31) * 255 // 31, ((p >> 5) & 63) * 255 // 63, (p & 31) * 255 // 31)
+# The simulator draws every non-ASCII character as '?'.  A logged character is still on screen if its cell in the
+# screenshot is exactly that '?' (same colours): later fills, sprites or text overwrite it, so stale entries drop out.
+font = [[int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{2})", l)] for l in open(os.path.join(sdk, "sim", "font8x8.h")) if l.strip().startswith("{0x")]
+QMARK = font[ord("?") - 0x20]
+def qcell(sc, fg, bg):
+    im = Image.new("RGB", (8 * sc, 8 * sc))
+    px = im.load()
+    for r in range(8 * sc):
+        for c in range(8 * sc):
+            px[c, r] = fg if (QMARK[r // sc] >> (c // sc)) & 1 else bg
+    return im
 for f in [int(v) for v in a.shot.split(",") if v]:
     ppm = os.path.join(a.out, "%s_%04d.ppm" % (name, f))
     img = Image.open(ppm).convert("RGB"); os.remove(ppm)
+    base = img.copy()
     d = ImageDraw.Draw(img)
     for (fr, x, y, sc, fg, bg, s) in entries:
-        if fr != f - 1: continue
-        cell = 8 * sc; font = ImageFont.truetype(a.font, cell, index=0)
+        if fr >= f: continue
+        cell = 8 * sc; font_img = ImageFont.truetype(a.font, cell, index=0)
+        ref = qcell(sc, rgb(fg), rgb(bg))
         for i, ch in enumerate(s):
             if ord(ch) < 0x80: continue
             cx = x + i * cell
+            if cx < 0 or y < 0 or cx + cell > img.width or y + cell > img.height: continue
+            if base.crop((cx, y, cx + cell, y + cell)).tobytes() != ref.tobytes(): continue
             d.rectangle([cx, y, cx + cell - 1, y + cell - 1], fill=rgb(bg))
-            d.text((cx + cell // 2, y + cell // 2), ch, font=font, fill=rgb(fg), anchor="mm")
+            d.text((cx + cell // 2, y + cell // 2), ch, font=font_img, fill=rgb(fg), anchor="mm")
     img.save(os.path.join(a.out, "%s_%04d.png" % (name, f)))
     print("wrote", os.path.join(a.out, "%s_%04d.png" % (name, f)))

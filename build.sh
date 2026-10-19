@@ -6,9 +6,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SDK=${SDK:-$HERE/../meos-sdk-src}
 PY=${PY:-python3}
 $PY -m ziglang cc --target=wasm32-freestanding -mcpu=mvp -nostdlib -O2 -s -ffreestanding -Wall -Wextra -Wno-unused-function \
-    -I"$SDK/include" -Wl,--no-entry -Wl,--export=_start -Wl,-z,stack-size=8192 \
-    -Wl,--initial-memory=65536 -Wl,--max-memory=16777216 -o "$HERE/gotanda.wasm" "$HERE/gotanda.c"
-$PY -I - "$HERE/gotanda.wasm" "$HERE/gotanda.manifest" <<'PYEOF'
+    $CFLAGS_EXTRA -I"$SDK/include" -Wl,--no-entry -Wl,--export=_start -Wl,-z,stack-size=8192 \
+    -Wl,--initial-memory=65536 -Wl,--max-memory=16777216 -o "${OUT:-$HERE/gotanda.wasm}" "$HERE/gotanda.c"
+$PY -I - "${OUT:-$HERE/gotanda.wasm}" "$HERE/gotanda.manifest" <<'PYEOF'
 import sys
 def leb(n):
     o = bytearray()
@@ -22,4 +22,4 @@ name = b"meos.manifest"
 payload = leb(len(name)) + name + m
 open(wasm, "wb").write(d + b"\x00" + leb(len(payload)) + payload)
 PYEOF
-ls -l "$HERE/gotanda.wasm"
+ls -l "${OUT:-$HERE/gotanda.wasm}"

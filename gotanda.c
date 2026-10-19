@@ -167,9 +167,9 @@ static const Cmd CMDS[] = {
     {11,'W',2,1,3,2},{11,'W',15,1,3,2},{11,'i',5,6,1,1},{11,'i',14,6,1,1},
     {12,'t',3,2,4,1},{12,'b',15,2,2,2},{12,'s',8,5,1,1},
     {13,'t',3,3,8,1},{13,'s',3,5,1,1},{13,'s',5,5,1,1},{13,'s',7,5,1,1},{13,'s',9,5,1,1},{13,'b',15,3,2,2},{13,'b',14,7,3,1},
-    {14,'c',1,1,18,8},{14,'t',4,4,2,1},{14,'t',14,4,2,1},{14,'i',2,2,1,1},{14,'i',17,2,1,1},
-    {15,'c',1,1,18,8},{15,'i',4,3,1,1},{15,'i',15,3,1,1},{15,'i',4,6,1,1},{15,'i',15,6,1,1},{15,'D',9,0,2,1},
-    {16,'c',1,1,18,8},{16,'i',3,3,1,1},{16,'i',16,3,1,1},{16,'i',3,6,1,1},{16,'i',16,6,1,1},
+    {14,'t',4,4,2,1},{14,'t',14,4,2,1},{14,'i',2,2,1,1},{14,'i',17,2,1,1},
+    {15,'i',4,3,1,1},{15,'i',15,3,1,1},{15,'i',4,6,1,1},{15,'i',15,6,1,1},{15,'D',9,0,2,1},
+    {16,'i',3,3,1,1},{16,'i',16,3,1,1},{16,'i',3,6,1,1},{16,'i',16,6,1,1},
     {12,'D',9,9,2,1},{13,'D',9,9,2,1},{14,'D',9,9,2,1},{15,'D',9,9,2,1},{16,'D',9,9,2,1},
 };
 typedef struct { signed char r, x, y, tr, tx, ty; } Warp;
@@ -229,13 +229,13 @@ typedef struct { int alive, x, y, vx, vy; } Proj;
 typedef struct { int alive, x, y, kind; } Drop;       /* 0 money, 1 heart, 2 metal */
 
 static int state, tick, state_t, room, prog, money, ice, metal, hp, maxhp, got, seen, gate_open, club_clear, boss_dead;
-static int px, py, face, hold_dir, hold_t, step, inv_t, atk_t, atk_cd, swing, shield_t, astro_n, lock_msg, shake;
+static int px, py, face, hold_dir, hold_t, step, inv_t, atk_t, atk_cd, swing, shield_t, astro_n, lock_msg;
 static Enemy en[MAXE];
 static Proj pr[MAXP];
 static Drop dr[MAXD];
 
 static const char *const *dlg;
-static int dlg_i, dlg_chars, dlg_act;
+static int dlg_i, dlg_chars, dlg_act, dlg_fresh, repaint = 1;
 
 static int hash(int a, int b, int c) { unsigned h = (unsigned)(a * 73856093) ^ (unsigned)(b * 19349663) ^ (unsigned)(c * 83492791); h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; return (int)(h & 0x7fff); }
 static int rnd(int n) { return (int)(meos_rand() % (unsigned)n); }
@@ -270,7 +270,7 @@ static int blocked(int x, int y, int w, int h, int edge)
 
 /* ---------- dialogue ---------- */
 
-static void say(const char *const *pages, int act) { dlg = pages; dlg_i = 0; dlg_chars = 0; dlg_act = act; state = S_DIALOG; hold_t = 0; }
+static void say(const char *const *pages, int act) { dlg = pages; dlg_i = 0; dlg_chars = 0; dlg_act = act; dlg_fresh = 1; state = S_DIALOG; hold_t = 0; }
 
 static void do_act(int a)
 {
@@ -328,7 +328,7 @@ static void spawn_room(void)
 
 static void enter_room(void)
 {
-    spawn_room();
+    spawn_room(); repaint = 1;
     if (room == 8 && !(seen & 1)) { seen |= 1; say(D_factory, A_NONE); }
     else if (room == R_CLUB && !club_clear && !(seen & 2)) { seen |= 2; say(D_clubintro, A_NONE); }
     else if (room == R_BOSS && !boss_dead && !(seen & 4)) { seen |= 4; say(D_bossintro, A_NONE); }
@@ -341,7 +341,7 @@ static void new_game(void)
     build();
     prog = 0; money = 0; ice = 0; metal = 0; maxhp = 10; hp = maxhp; got = 0; seen = 0; gate_open = 0; club_clear = 0; boss_dead = 0;
     astro_n = 0; room = R_PLAZA; place(9, 4); face = DOWN; hold_t = 0; inv_t = 0; atk_t = 0; atk_cd = 0; shield_t = 0; swing = 1;
-    spawn_room();
+    spawn_room(); repaint = 1;
     state = S_PLAY;
     say(D_intro, A_NONE);
 }
@@ -349,7 +349,7 @@ static void new_game(void)
 static void respawn(void)
 {
     hp = maxhp; room = R_PLAZA; place(9, 6); face = DOWN; inv_t = 60; hold_t = 0; atk_t = 0; shield_t = 0;
-    spawn_room(); state = S_PLAY;
+    spawn_room(); state = S_PLAY; repaint = 1;
 }
 
 /* ---------- interaction ---------- */
@@ -447,7 +447,7 @@ static void hurt_player(int dmg, int fromx, int fromy)
 {
     if (inv_t > 0) return;
     if (shield_t > 0) { dmg = (dmg + 1) / 2; if (dmg < 1) dmg = 1; }
-    hp -= dmg; inv_t = 45; shake = 6;
+    hp -= dmg; inv_t = 45;
     int dx = (px + PS / 2) - fromx, dy = (py + PS / 2) - fromy;
     int sx = iabs(dx) >= iabs(dy) ? (dx < 0 ? -1 : 1) : 0, sy = iabs(dx) < iabs(dy) ? (dy < 0 ? -1 : 1) : 0;
     for (int i = 0; i < 4; i++) {
@@ -497,7 +497,7 @@ static void update_enemy(Enemy *e)
             if (--e->t <= 0) e->state = 2;
         } else if (e->state == 2) {                            /* charge */
             int sx = e->dir == RIGHT ? 11 : e->dir == LEFT ? -11 : 0, sy = e->dir == DOWN ? 11 : e->dir == UP ? -11 : 0;
-            if (try_move(e, sx, sy)) { e->state = 3; e->t = 80; shake = 10; }
+            if (try_move(e, sx, sy)) { e->state = 3; e->t = 80; }
         } else {                                               /* stunned */
             if (--e->t <= 0) { e->state = 0; e->t = 70 + rnd(40); }
         }
@@ -528,7 +528,7 @@ static void player_attack(void)
         }
     }
     for (int ty = hy / TS; ty <= (hy + hh - 1) / TS; ty++) for (int tx = hx / TS; tx <= (hx + hw - 1) / TS; tx++)
-        if (tx >= 0 && ty >= 0 && tx < RW && ty < RH && rm[room][ty][tx] == 'i') { rm[room][ty][tx] = '.'; if (ice < 9) ice++; }
+        if (tx >= 0 && ty >= 0 && tx < RW && ty < RH && rm[room][ty][tx] == 'i') { rm[room][ty][tx] = '.'; if (ice < 9) ice++; repaint = 1; }
 }
 
 static void use_bridge(void)
@@ -538,7 +538,7 @@ static void use_bridge(void)
     int tx = qx / TS, ty = qy / TS;
     if (qx < 0 || qy < 0 || tx >= RW || ty >= RH || rm[room][ty][tx] != 'o') return;
     if (ice < 1) { say(D_noice, A_NONE); return; }
-    ice--; rm[room][ty][tx] = 'h';
+    ice--; rm[room][ty][tx] = 'h'; repaint = 1;
     atk_cd = 10;
 }
 
@@ -553,7 +553,6 @@ static void update_play(void)
     if (inv_t > 0) inv_t--;
     if (atk_cd > 0) atk_cd--;
     if (shield_t > 0) shield_t--;
-    if (shake > 0) shake--;
     /* walk */
     if (hold_t > 0 && atk_t == 0) {
         hold_t--;
@@ -609,7 +608,7 @@ static void update_play(void)
         if (it->r != room || (got >> i & 1)) continue;
         int ix = it->x * TS + 8, iy = it->y * TS + 8;
         if (px < ix + 48 && px + PS > ix && py < iy + 48 && py + PS > iy) {
-            got |= 1 << i;
+            got |= 1 << i; repaint = 1;
             if (it->t == 0) { maxhp += 2; hp = maxhp; }
             else say(D_fur, A_FUR);
         }
@@ -635,7 +634,7 @@ static void update_play(void)
         if (mx < 0 || my < 0 || mx >= SW || my >= RH * TS || (rm[room][my / TS][mx / TS] != 'o' && tile_solid(mx / TS, my / TS, 1))) { p->alive = 0; continue; }
         if (px < p->x + 20 && px + PS > p->x && py < p->y + 20 && py + PS > p->y) {
             p->alive = 0;
-            if (shield_t > 0) { shake = 3; continue; }
+            if (shield_t > 0) continue;
             hurt_player(2, p->x + 10 - p->vx * 4, p->y + 10 - p->vy * 4);
         }
     }
@@ -651,9 +650,18 @@ static void rect(int x, int y, int w, int h, unsigned c)
     if (y + h > SH) h = SH - y;
     if (w > 0 && h > 0) meos_display_fill(x, y, w, h, c);
 }
-static int ox, oy;                                           /* screen shake */
-static void R(int x, int y, int w, int h, unsigned c) { rect(x + ox, y + OY + oy, w, h, c); }
-static void T(int x, int y, int x1, int y1, int x2, int y2, unsigned c) { meos_display_tri(x + ox, y + OY + oy, x1 + ox, y1 + OY + oy, x2 + ox, y2 + OY + oy, c); }
+static unsigned short *cv;                                   /* when set, R() draws into this sprite buffer instead of the screen */
+static int cvw, cvh;
+static void bfill(int x, int y, int w, int h, unsigned c)
+{
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > cvw) w = cvw - x;
+    if (y + h > cvh) h = cvh - y;
+    for (int j = 0; j < h; j++) { unsigned short *p = cv + (y + j) * cvw + x; for (int i = 0; i < w; i++) p[i] = (unsigned short)c; }
+}
+static void R(int x, int y, int w, int h, unsigned c) { if (cv) bfill(x, y, w, h, c); else rect(x, y + OY, w, h, c); }
+static void T(int x, int y, int x1, int y1, int x2, int y2, unsigned c) { meos_display_tri(x, y + OY, x1, y1 + OY, x2, y2 + OY, c); }
 
 static void text(int x, int y, const char *s, int n, unsigned fg, unsigned bg, int sc)
 {
@@ -678,9 +686,9 @@ static unsigned floor_color(void)
     switch (room) {
     case R_OFFICE: return C(150, 118, 80);
     case R_BAR: return C(96, 60, 36);
-    case R_CLUB: return C(60, 22, 70);
-    case R_HQ: return C(54, 70, 44);
-    case R_BOSS: return C(60, 20, 24);
+    case R_CLUB: return C(104, 28, 84);
+    case R_HQ: return C(62, 82, 50);
+    case R_BOSS: return C(86, 22, 28);
     default: return C(34, 44, 78);
     }
 }
@@ -798,44 +806,163 @@ static void draw_npc(int i)
     }
 }
 
-static void draw_enemy(Enemy *e)
+/* ---- characters: pre-rendered into RGB565 buffers (keyed to the flat floor colour) and drawn with ONE blit each ---- */
+enum { K_PLAYER, K_DRUNK, K_YAKUZA, K_HOSTESS, K_BOSS, K_BOSS_T, K_BOSS_S, NKIND };
+typedef struct { unsigned short *p; unsigned key; short w, h; } Spr;
+static Spr spr[NKIND][4][2];
+static unsigned short *heap;
+static unsigned floor_key;
+
+static void paint_kind(int kind, int dir, int step, int x, int y)       /* draws one character with its top-left at (x, y) */
 {
-    int x = e->x - 2, y = e->y - 6, flash = e->hurt > 0 && (tick & 1);
-    int d = e->type == T_BOSS ? DOWN : (iabs(px - e->x) > iabs(py - e->y) ? (px < e->x ? LEFT : RIGHT) : (py < e->y ? UP : DOWN));
-    int stp = (tick >> 3) & 1;
-    if (flash) { R(e->x, e->y, e->sz, e->sz, C(255, 255, 255)); return; }
-    switch (e->type) {
-    case T_DRUNK:
-        person(x + (stp ? 1 : -1), y, 48, d, stp, C(110, 150, 90), C(70, 70, 100), C(70, 40, 20), C(255, 150, 140), 0, 0, 0);
-        R(x + 38, y + 24, 6, 14, C(60, 190, 80)); R(x + 39, y + 20, 4, 5, C(60, 190, 80));
+    switch (kind) {
+    case K_PLAYER:
+        person(x + 2, y + 4, 36, dir, step, C(180, 140, 90), C(60, 56, 70), C(50, 40, 40), C(240, 195, 155), C(80, 70, 80), 2, 0);
         break;
-    case T_YAKUZA:
-        person(x, y, 48, d, stp, C(26, 26, 34), C(20, 20, 26), C(10, 10, 10), C(235, 190, 150), 0, 1, 0);
-        R(x + 21, y + 20, 6, 14, C(210, 30, 40));
+    case K_DRUNK:
+        person(x + 2, y + 4, 40, dir, step, C(110, 150, 90), C(70, 70, 100), C(70, 40, 20), C(255, 150, 140), 0, 0, 0);
+        R(x + 33, y + 24, 5, 12, C(60, 190, 80)); R(x + 34, y + 21, 3, 4, C(60, 190, 80));
         break;
-    case T_HOSTESS:
-        person(x, y, 48, d, stp, C(245, 90, 170), C(200, 60, 130), C(250, 215, 90), C(255, 214, 180), 0, 0, 1);
-        R(x + 30, y + 4, 6, 6, C(255, 60, 60));
+    case K_YAKUZA:
+        person(x + 2, y + 4, 40, dir, step, C(26, 26, 34), C(20, 20, 26), C(10, 10, 10), C(235, 190, 150), 0, 1, 0);
+        R(x + 20, y + 22, 5, 12, C(210, 30, 40));
         break;
-    case T_BOSS: {
-        unsigned tele = e->state == 1 && (tick & 2) ? C(255, 60, 40) : C(40, 20, 50);
-        if (e->state == 3) tele = C(120, 120, 160);
-        person(e->x - 4, e->y - 10, 74, DOWN, stp, tele, C(20, 20, 26), C(20, 20, 20), C(235, 190, 150), 0, 1, 0);
-        T(e->x + 12, e->y + 30, e->x + 52, e->y + 30, e->x + 32, e->y + 54, C(60, 200, 90));      /* dragon tattoo */
-        if (e->state == 1) R(e->x + 24, e->y - 24, 16, 14, C(255, 230, 60));
+    case K_HOSTESS:
+        person(x + 2, y + 4, 40, dir, step, C(245, 90, 170), C(200, 60, 130), C(250, 215, 90), C(255, 214, 180), 0, 0, 1);
+        R(x + 28, y + 6, 5, 5, C(255, 60, 60));
+        break;
+    default: {
+        unsigned body = kind == K_BOSS_T ? C(255, 60, 40) : kind == K_BOSS_S ? C(120, 120, 160) : C(40, 20, 50);
+        person(x + 2, y + 4, 60, DOWN, step, body, C(20, 20, 26), C(20, 20, 20), C(235, 190, 150), 0, 1, 0);
+        R(x + 16, y + 38, 32, 5, C(60, 200, 90)); R(x + 20, y + 43, 24, 5, C(60, 200, 90)); R(x + 25, y + 48, 14, 5, C(60, 200, 90));      /* dragon tattoo */
         break; }
     }
 }
 
+static void sprite_init(void)
+{
+    static const short size[NKIND] = { 40, 44, 44, 44, 64, 64, 64 };
+    int bytes = 0;
+    for (int k = 0; k < NKIND; k++) for (int d = 0; d < (k >= K_BOSS ? 1 : 4); d++) for (int st = 0; st < 2; st++) bytes += size[k] * size[k] * 2;
+    int pages = (bytes + 65535) / 65536;
+#ifdef __wasm__
+    int pg = __builtin_wasm_memory_grow(0, pages);
+    heap = pg < 0 ? 0 : (unsigned short *)((unsigned)pg * 65536u);
+#else
+    static unsigned short host_heap[100000];
+    (void)pages; heap = host_heap;
+#endif
+    if (!heap) return;
+    unsigned short *p = heap;
+    for (int k = 0; k < NKIND; k++) for (int d = 0; d < (k >= K_BOSS ? 1 : 4); d++) for (int st = 0; st < 2; st++) {
+        Spr *s = &spr[k][d][st];
+        s->p = p; s->w = s->h = size[k]; s->key = ~0u; p += size[k] * size[k];
+    }
+}
+
+static Spr *get_sprite(int kind, int dir, int step)
+{
+    if (!heap) return 0;
+    if (kind >= K_BOSS) dir = 0;
+    Spr *s = &spr[kind][dir][step];
+    if (s->key != floor_key) {                               /* (re)render against the current floor colour: only when the floor colour changed */
+        cv = s->p; cvw = s->w; cvh = s->h;
+        bfill(0, 0, cvw, cvh, floor_key);
+        paint_kind(kind, dir, step, 0, 0);
+        cv = 0; s->key = floor_key;
+    }
+    return s;
+}
+
+static int plain_floor(int x, int y, int w, int h)           /* the rectangle lies on bare floor inside the room */
+{
+    if (x < 0 || y < 0 || x + w > SW || y + h > RH * TS) return 0;
+    for (int ty = y / TS; ty <= (y + h - 1) / TS; ty++) for (int tx = x / TS; tx <= (x + w - 1) / TS; tx++) if (rm[room][ty][tx] != '.') return 0;
+    return 1;
+}
+
+static void draw_character(int kind, int dir, int step, int x, int y, int size)
+{
+    if (plain_floor(x, y, size, size)) {
+        Spr *s = get_sprite(kind, dir, step);
+        if (s) { meos_display_blit(x, y + OY, size, size, s->p, 1); return; }
+    }
+    paint_kind(kind, dir, step, x, y);                        /* off the plain floor (doors, bridges, room edges): slower, with fills */
+}
+
+/* ---- the dynamic layer: whatever moves is erased by repainting the map cells under its previous rectangle ---- */
+typedef struct { short x, y, w, h; } Rc;
+static Rc drawn[40];
+static int nd;
+static unsigned char dirty[RH][RW];
+
+static void note(int x, int y, int w, int h) { if (nd < 40) { drawn[nd].x = (short)x; drawn[nd].y = (short)y; drawn[nd].w = (short)w; drawn[nd].h = (short)h; nd++; } }
+
+static void draw_cell(int tx, int ty)
+{
+    R(tx * TS, ty * TS, TS, TS, floor_key);
+    char c = rm[room][ty][tx];
+    if (c != '.') draw_tile(c, tx * TS, ty * TS, tx, ty);
+    for (unsigned i = 0; i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) {
+        const Item *it = &ITEMS[i];
+        if (it->r != room || it->x != tx || it->y != ty || (got >> i & 1)) continue;
+        int x = tx * TS, y = ty * TS;
+        if (it->t == 0) { R(x + 10, y + 12, 18, 14, C(255, 70, 100)); R(x + 32, y + 12, 18, 14, C(255, 70, 100)); R(x + 10, y + 22, 40, 12, C(255, 70, 100)); T(x + 10, y + 32, x + 50, y + 32, x + 30, y + 54, C(255, 70, 100)); R(x + 16, y + 16, 6, 6, C(255, 200, 210)); }
+        else { R(x + 14, y + 26, 36, 12, C(255, 255, 255)); R(x + 18, y + 26, 10, 12, C(240, 70, 30)); R(x + 34, y + 26, 10, 12, C(30, 30, 36)); }
+    }
+    for (unsigned i = 0; i < sizeof(NPCS) / sizeof(NPCS[0]); i++) if (NPCS[i].r == room && NPCS[i].x == tx && NPCS[i].y == ty) draw_npc((int)i);
+}
+
+static void paint_room(void)
+{
+    floor_key = floor_color();
+    rect(0, OY, SW, SH - OY, floor_key);
+    for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) {
+        int busy = rm[room][ty][tx] != '.';
+        for (unsigned i = 0; !busy && i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) if (ITEMS[i].r == room && ITEMS[i].x == tx && ITEMS[i].y == ty && !(got >> i & 1)) busy = 1;
+        for (unsigned i = 0; !busy && i < sizeof(NPCS) / sizeof(NPCS[0]); i++) if (NPCS[i].r == room && NPCS[i].x == tx && NPCS[i].y == ty) busy = 1;
+        if (busy) draw_cell(tx, ty);
+    }
+}
+
+static void erase_dynamic(void)
+{
+    int any = 0;
+    for (int i = 0; i < nd; i++) {
+        int x0 = drawn[i].x < 0 ? 0 : drawn[i].x / TS, y0 = drawn[i].y < 0 ? 0 : drawn[i].y / TS;
+        int x1 = (drawn[i].x + drawn[i].w - 1) / TS, y1 = (drawn[i].y + drawn[i].h - 1) / TS;
+        if (x1 >= RW) x1 = RW - 1;
+        if (y1 >= RH) y1 = RH - 1;
+        for (int ty = y0; ty <= y1; ty++) for (int tx = x0; tx <= x1; tx++) { dirty[ty][tx] = 1; any = 1; }
+    }
+    nd = 0;
+    if (!any) return;
+    for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) if (dirty[ty][tx]) { dirty[ty][tx] = 0; draw_cell(tx, ty); }
+}
+
+static void draw_enemy(Enemy *e)
+{
+    int d = e->type == T_BOSS ? DOWN : (iabs(px - e->x) > iabs(py - e->y) ? (px < e->x ? LEFT : RIGHT) : (py < e->y ? UP : DOWN));
+    int stp = (tick >> 3) & 1;
+    if (e->hurt > 0 && (tick & 1)) { R(e->x, e->y, e->sz, e->sz, C(255, 255, 255)); note(e->x, e->y, e->sz, e->sz); return; }
+    int kind = e->type == T_DRUNK ? K_DRUNK : e->type == T_YAKUZA ? K_YAKUZA : e->type == T_HOSTESS ? K_HOSTESS :
+               e->state == 1 && (tick & 2) ? K_BOSS_T : e->state == 3 ? K_BOSS_S : K_BOSS;
+    draw_character(kind, d, stp, e->x, e->y, e->sz);
+    note(e->x, e->y, e->sz, e->sz);
+    if (e->type == T_BOSS && e->state == 1) { R(e->x + 24, e->y - 24, 16, 14, C(255, 230, 60)); note(e->x + 24, e->y - 24, 16, 14); }
+}
+
 static void draw_player(void)
 {
-    int x = px - 4, y = py - 10;
-    if (inv_t > 0 && (tick & 2)) return;
-    person(x, y, 48, face, (step >> 2) & 1, C(180, 140, 90), C(60, 56, 70), C(50, 40, 40), C(240, 195, 155), C(80, 70, 80), 2, 0);
+    if (inv_t > 0 && (tick & 2)) { note(px, py, PS, PS); return; }
+    draw_character(K_PLAYER, face, (step >> 2) & 1, px, py, PS);
+    note(px, py, PS, PS);
     if (shield_t > 0) {
+        int x = px - 4, y = py - 10;
         int fx = face == LEFT ? x - 12 : face == RIGHT ? x + 30 : x + 10, fy = face == UP ? y - 6 : y + 14;
         R(fx, fy, 24, 30, C(190, 200, 215)); R(fx + 4, fy + 4, 16, 22, C(120, 140, 170)); R(fx + 10, fy + 10, 4, 10, C(255, 255, 255));
         if (shield_t < 60 && (tick & 2)) R(fx, fy, 24, 30, C(255, 255, 255));
+        note(fx, fy, 24, 30);
     }
     if (atk_t > 0) {
         int hx, hy, hw, hh;
@@ -843,6 +970,7 @@ static void draw_player(void)
         unsigned glow = C(90, 240, 255);
         if (face == UP || face == DOWN) { R(hx + 22, hy, 12, hh, glow); R(hx + 25, hy, 6, hh, C(255, 255, 255)); }
         else { R(hx, hy + 22, hw, 12, glow); R(hx, hy + 25, hw, 6, C(255, 255, 255)); }
+        note(hx, hy, hw, hh);
     }
 }
 
@@ -877,56 +1005,57 @@ static void draw_hud(void)
     text(20 + 5 * 16 + 6, 52, o, -1, C(255, 255, 255), C(8, 8, 20), 2);
 }
 
-static void draw_world(void)
+static int hud_sig[9] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+
+static void render_world(void)
 {
-    ox = shake ? (int)(tick & 1) * 6 - 3 : 0; oy = shake ? (int)((tick >> 1) & 1) * 6 - 3 : 0;
-    rect(0, OY, SW, SH - OY, floor_color());
-    if (room < 12) { for (int i = 1; i < RH; i++) R(0, i * TS, SW, 1, C(44, 56, 96)); for (int i = 1; i < RW; i++) R(i * TS, 0, 1, RH * TS, C(44, 56, 96)); }
-    for (int ty = 0; ty < RH; ty++) for (int tx = 0; tx < RW; tx++) { char c = rm[room][ty][tx]; if (c != '.') draw_tile(c, tx * TS, ty * TS, tx, ty); }
-    for (unsigned i = 0; i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++) {
-        const Item *it = &ITEMS[i];
-        if (it->r != room || (got >> i & 1)) continue;
-        int x = it->x * TS, y = it->y * TS + ((tick >> 3) & 1) * 3;
-        if (it->t == 0) { R(x + 10, y + 12, 18, 14, C(255, 70, 100)); R(x + 32, y + 12, 18, 14, C(255, 70, 100)); R(x + 10, y + 22, 40, 12, C(255, 70, 100)); T(x + 10, y + 32, x + 50, y + 32, x + 30, y + 54, C(255, 70, 100)); R(x + 16, y + 16, 6, 6, C(255, 200, 210)); }
-        else { R(x + 14, y + 26, 36, 12, C(255, 255, 255)); R(x + 18, y + 26, 10, 12, C(240, 70, 30)); R(x + 34, y + 26, 10, 12, C(30, 30, 36)); }
-    }
+    int full = repaint;
+    if (repaint) { paint_room(); repaint = 0; nd = 0; hud_sig[0] = -1; }
+    else erase_dynamic();
     for (int i = 0; i < MAXD; i++) {
         if (!dr[i].alive) continue;
         int x = dr[i].x, y = dr[i].y;
         if (dr[i].kind == 0) { R(x + 4, y + 2, 20, 24, C(255, 210, 40)); R(x + 8, y + 6, 12, 16, C(255, 240, 140)); }
         else if (dr[i].kind == 1) { R(x + 2, y + 4, 10, 8, C(255, 70, 100)); R(x + 14, y + 4, 10, 8, C(255, 70, 100)); R(x + 2, y + 10, 22, 8, C(255, 70, 100)); T(x + 2, y + 16, x + 24, y + 16, x + 13, y + 28, C(255, 70, 100)); }
         else { R(x + 2, y + 8, 24, 16, C(170, 180, 200)); R(x + 6, y + 12, 16, 4, C(230, 240, 255)); }
+        note(x, y, 28, 28);
     }
-    for (unsigned i = 0; i < sizeof(NPCS) / sizeof(NPCS[0]); i++) draw_npc((int)i);
+    for (int i = 0; i < MAXP; i++) if (pr[i].alive) { R(pr[i].x, pr[i].y, 20, 20, C(255, 80, 180)); R(pr[i].x + 5, pr[i].y + 5, 10, 10, C(255, 200, 230)); note(pr[i].x, pr[i].y, 20, 20); }
     for (int i = 0; i < MAXE; i++) if (en[i].alive) draw_enemy(&en[i]);
-    for (int i = 0; i < MAXP; i++) if (pr[i].alive) { R(pr[i].x, pr[i].y, 20, 20, C(255, 80, 180)); R(pr[i].x + 5, pr[i].y + 5, 10, 10, C(255, 200, 230)); }
     draw_player();
-    ox = oy = 0;
-    draw_hud();
+    int v[9] = { hp, maxhp, money, ice, metal, prog, shield_t > 0, state, 0 };
+    int hud = full;
+    for (int i = 0; i < 8; i++) if (v[i] != hud_sig[i]) { hud_sig[i] = v[i]; hud = 1; }
+    if (hud) draw_hud();
 }
+
+static int dlg_shown = -1, dlg_blink = -1;
 
 static void draw_dialog(void)
 {
     const char *page = dlg[dlg_i];
-    rect(40, 478, 1200, 226, C(255, 255, 255)); rect(44, 482, 1192, 218, C(8, 12, 44));
-    int line = 0, nchars = dlg_chars, i = 0;
-    int is_art = page[0] == (char)0xE3 && page[1] == (char)0x82 && page[2] == (char)0xA2;        /* ア... = Artemis */
-    while (page[i] && line < 4) {
-        int j = i;
-        while (page[j] && page[j] != '\n') j++;
-        int len = j - i, total = utf8_len(page + i, len);
-        int show = nchars < total ? nchars : total;
-        if (line == 0) {
-            if (show > 0) text(64, 490, page + i, utf8_bytes(page + i, show), is_art ? C(70, 230, 255) : C(255, 230, 80), C(8, 12, 44), 3);
-        } else if (show > 0) {
-            text(64, 530 + (line - 1) * 54, page + i, utf8_bytes(page + i, show), C(255, 255, 255), C(8, 12, 44), 4);
+    if (dlg_fresh) { rect(40, 478, 1200, 226, C(255, 255, 255)); rect(44, 482, 1192, 218, C(8, 12, 44)); dlg_fresh = 0; dlg_shown = -1; dlg_blink = -1; }
+    if (dlg_chars != dlg_shown) {
+        dlg_shown = dlg_chars;
+        int line = 0, nchars = dlg_chars, i = 0;
+        int is_art = page[0] == (char)0xE3 && page[1] == (char)0x82 && page[2] == (char)0xA2;        /* ア... = Artemis */
+        while (page[i] && line < 4) {
+            int j = i;
+            while (page[j] && page[j] != '\n') j++;
+            int len = j - i, total = utf8_len(page + i, len);
+            int show = nchars < total ? nchars : total;
+            if (show > 0) {
+                if (line == 0) text(64, 490, page + i, utf8_bytes(page + i, show), is_art ? C(70, 230, 255) : C(255, 230, 80), C(8, 12, 44), 3);
+                else text(64, 530 + (line - 1) * 54, page + i, utf8_bytes(page + i, show), C(255, 255, 255), C(8, 12, 44), 4);
+            }
+            nchars -= total;
+            if (nchars < 0) nchars = 0;
+            line++;
+            i = page[j] ? j + 1 : j;
         }
-        nchars -= total;
-        if (nchars < 0) nchars = 0;
-        line++;
-        i = page[j] ? j + 1 : j;
     }
-    if ((tick >> 3) & 1) T(1196, 672 - OY, 1220, 672 - OY, 1208, 688 - OY, C(255, 230, 80));
+    int b = (tick >> 3) & 1;
+    if (b != dlg_blink) { dlg_blink = b; rect(1196, 672, 24, 16, b ? C(255, 230, 60) : C(8, 12, 44)); }
 }
 
 static int page_chars(const char *page)
@@ -942,22 +1071,41 @@ static void center(int y, const char *s, unsigned fg, unsigned bg, int sc)
     text((SW - w) / 2, y, s, -1, fg, bg, sc);
 }
 
+static int screen_fresh = 1;                                  /* a full-screen page (title, ending) is painted once; only the blinking line changes */
+
 static void draw_title(void)
 {
-    rect(0, 0, SW, SH, C(10, 8, 30));
-    for (int i = 0; i < 40; i++) { int h = hash(i, 3, 9); rect((h * 7) % SW, (h * 13) % 380, 3, 3, C(220, 220, 255)); }
-    rect(900, 60, 280, 280, C(230, 170, 110)); rect(920, 120, 240, 30, C(200, 120, 70)); rect(910, 200, 260, 24, C(250, 210, 160));   /* Jupiter */
-    for (int i = 0; i < 9; i++) { int bh = 120 + hash(i, 1, 1) % 160; rect(i * 150 - 20, 500 - bh, 130, bh + 220, C(26 + i % 3 * 6, 20, 56)); rect(i * 150 - 20, 500 - bh, 130, 6, i % 2 ? C(255, 60, 160) : C(60, 230, 255)); for (int w = 0; w < bh / 40; w++) rect(i * 150 + 4, 520 - bh + w * 40, 18, 14, (hash(i, w, 5) & 1) ? C(255, 215, 110) : C(26, 22, 50)); }
-    rect(0, 640, SW, 80, C(34, 44, 78)); rect(0, 640, SW, 4, C(255, 60, 160));
-    rect(0, 96, SW, 200, C(10, 8, 30)); rect(0, 96, SW, 3, C(255, 60, 160)); rect(0, 293, SW, 3, C(60, 230, 255));
-    rect(0, 410, SW, 130, C(10, 8, 30));
-    center(110, "SECTOR HEAVEN", C(255, 255, 255), C(10, 8, 30), 8);
-    center(200, "五反田三郎の事件簿 ー ヤシキ猫を探せ ー", C(255, 230, 80), C(10, 8, 30), 3);
-    center(268, "木星の衛星エウロパ ゴールデン街", C(160, 200, 255), C(10, 8, 30), 2);
-    person(560, 540, 96, DOWN, 0, C(180, 140, 90), C(60, 56, 70), C(50, 40, 40), C(240, 195, 155), C(80, 70, 80), 2, 0);
-    draw_cat(700, 590);
-    if ((tick >> 4) & 1) center(420, "PRESS ENTER", C(255, 255, 255), C(10, 8, 30), 4);
-    center(490, "矢印/WASD:移動  Space:話す・攻撃  1/2/3:アルテミス変形  H:ヒント  Q:終了", C(200, 200, 230), C(10, 8, 30), 2);
+    unsigned bg = C(10, 8, 30);
+    if (screen_fresh) {
+        screen_fresh = 0;
+        rect(0, 0, SW, SH, bg);
+        for (int i = 0; i < 40; i++) { int h = hash(i, 3, 9); rect((h * 7) % SW, (h * 13) % 380, 3, 3, C(220, 220, 255)); }
+        rect(900, 60, 280, 280, C(230, 170, 110)); rect(920, 120, 240, 30, C(200, 120, 70)); rect(910, 200, 260, 24, C(250, 210, 160));   /* Jupiter */
+        for (int i = 0; i < 9; i++) { int bh = 120 + hash(i, 1, 1) % 160; rect(i * 150 - 20, 500 - bh, 130, bh + 220, C(26 + i % 3 * 6, 20, 56)); rect(i * 150 - 20, 500 - bh, 130, 6, i % 2 ? C(255, 60, 160) : C(60, 230, 255)); for (int w = 0; w < bh / 40; w++) rect(i * 150 + 4, 520 - bh + w * 40, 18, 14, (hash(i, w, 5) & 1) ? C(255, 215, 110) : C(26, 22, 50)); }
+        rect(0, 640, SW, 80, C(34, 44, 78)); rect(0, 640, SW, 4, C(255, 60, 160));
+        rect(0, 96, SW, 200, bg); rect(0, 96, SW, 3, C(255, 60, 160)); rect(0, 293, SW, 3, C(60, 230, 255));
+        rect(0, 410, SW, 130, bg);
+        center(110, "SECTOR HEAVEN", C(255, 255, 255), bg, 8);
+        center(200, "五反田三郎の事件簿 ー ヤシキ猫を探せ ー", C(255, 230, 80), bg, 3);
+        center(268, "木星の衛星エウロパ ゴールデン街", C(160, 200, 255), bg, 2);
+        paint_kind(K_PLAYER, DOWN, 0, 600, 560); draw_cat(700, 590);
+        center(490, "矢印/WASD:移動  Space:話す・攻撃  1/2/3:アルテミス変形  H:ヒント  Q:終了", C(200, 200, 230), bg, 2);
+    }
+    center(420, "PRESS ENTER", ((tick >> 4) & 1) ? C(255, 255, 255) : bg, bg, 4);
+}
+
+static void draw_clear(void)
+{
+    unsigned bg = C(10, 8, 30);
+    if (screen_fresh) {
+        screen_fresh = 0;
+        rect(0, 0, SW, SH, bg);
+        for (int i = 0; i < 60; i++) { int h = hash(i, 7, 2); rect((h * 7) % SW, (h * 13) % SH, 3, 3, C(220, 220, 255)); }
+        center(180, "THE END", C(255, 255, 255), bg, 8);
+        center(290, "五反田三郎の事件簿 第一話「ヤシキ猫を探せ」 完", C(255, 230, 80), bg, 3);
+        draw_cat(600, 400);
+    }
+    center(540, "PRESS ENTER", ((tick >> 4) & 1) ? C(200, 200, 230) : bg, bg, 3);
 }
 
 /* ---------- main ---------- */
@@ -966,7 +1114,9 @@ void _start(void)
 {
     if (meos_display_open() < 0) { meos_puts("this app needs the display permission\n"); return; }
     meos_display_clip(0, 0, SW, SH);
-    unsigned last = meos_uptime_ms();
+    unsigned last = meos_uptime_ms(), prev = last;
+    int acc = 0;
+    sprite_init();
     build();
     state = S_TITLE; state_t = 0; room = R_PLAZA;
 #ifdef DEBUG_ROOM
@@ -974,21 +1124,27 @@ void _start(void)
 #endif
     for (;;) {
         tick++; state_t++;
+        /* The game runs at 30 steps per second of real time: if drawing is slow, several steps are done per picture. */
+        unsigned now_ms = meos_uptime_ms();
+        acc += (int)(now_ms - prev); prev = now_ms;
+        int steps = acc / 33;
+        if (steps < 1) steps = 1;
+        if (steps > 3) { steps = 3; acc = 0; } else { acc -= steps * 33; if (acc < 0) acc = 0; }
         int k, quit = 0;
         while ((k = meos_getkey()) >= 0) {
             if (k == 'q' || k == 'Q') { quit = 1; break; }
             int enter = (k == '\r' || k == '\n'), space = (k == ' ');
             if (state == S_TITLE || state == S_DEAD) {
-                if ((enter || space) && state_t > 15) { if (state == S_TITLE) new_game(); else respawn(); }
+                if ((enter || space) && state_t > 15) { if (state == S_TITLE) new_game(); else respawn(); screen_fresh = 1; }
                 continue;
             }
-            if (state == S_CLEAR) { if ((enter || space) && state_t > 30) { state = S_TITLE; state_t = 0; } continue; }
+            if (state == S_CLEAR) { if ((enter || space) && state_t > 30) { state = S_TITLE; state_t = 0; screen_fresh = 1; } continue; }
             if (state == S_DIALOG) {
                 if (enter || space || k == 'e') {
                     int total = page_chars(dlg[dlg_i]);
                     if (dlg_chars < total) dlg_chars = total;
-                    else if (dlg[dlg_i + 1]) { dlg_i++; dlg_chars = 0; }
-                    else { int a = dlg_act; dlg = 0; state = S_PLAY; do_act(a); }
+                    else if (dlg[dlg_i + 1]) { dlg_i++; dlg_chars = 0; dlg_fresh = 1; }
+                    else { int a = dlg_act; dlg = 0; state = S_PLAY; repaint = 1; do_act(a); if (state == S_CLEAR) screen_fresh = 1; }
                 }
                 continue;
             }
@@ -1013,25 +1169,22 @@ void _start(void)
 
         switch (state) {
         case S_TITLE: draw_title(); break;
-        case S_PLAY: update_play(); if (state == S_PLAY || state == S_DIALOG || state == S_DEAD) draw_world(); if (state == S_DIALOG) draw_dialog(); break;
+        case S_PLAY:
+            for (int n = 0; n < steps && state == S_PLAY; n++) update_play();
+            if (state == S_PLAY || state == S_DEAD) render_world();
+            else if (state == S_DIALOG) { if (repaint) render_world(); draw_dialog(); }
+            break;
         case S_DIALOG:
             if (dlg && dlg_chars < page_chars(dlg[dlg_i]) && (tick & 1)) dlg_chars += 2;
-            draw_world(); draw_dialog();
+            if (repaint) render_world();
+            draw_dialog();
             break;
         case S_DEAD:
-            draw_world();
             center(250, "GAME OVER", C(255, 255, 255), C(120, 0, 20), 8);
             center(340, "探偵は、まだ倒れない…", C(255, 255, 255), C(120, 0, 20), 3);
-            if ((tick >> 4) & 1) center(420, "PRESS ENTER", C(255, 230, 80), C(120, 0, 20), 3);
+            center(420, "PRESS ENTER", ((tick >> 4) & 1) ? C(255, 230, 80) : C(120, 0, 20), C(120, 0, 20), 3);
             break;
-        case S_CLEAR:
-            rect(0, 0, SW, SH, C(10, 8, 30));
-            for (int i = 0; i < 60; i++) { int h = hash(i, tick / 20, 2); rect((h * 7) % SW, (h * 13) % SH, 3, 3, C(220, 220, 255)); }
-            center(180, "THE END", C(255, 255, 255), C(10, 8, 30), 8);
-            center(290, "五反田三郎の事件簿 第一話「ヤシキ猫を探せ」 完", C(255, 230, 80), C(10, 8, 30), 3);
-            draw_cat(600, 400);
-            if ((tick >> 4) & 1) center(540, "PRESS ENTER", C(200, 200, 230), C(10, 8, 30), 3);
-            break;
+        case S_CLEAR: draw_clear(); break;
         }
         frame_wait(&last, 33);
     }
