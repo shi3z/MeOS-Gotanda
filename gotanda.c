@@ -695,7 +695,10 @@ static Slot slots[NART][2][3];                                /* [art][mirrored]
 static void heap_init(int pages)
 {
 #ifdef __wasm__
-    int pg = __builtin_wasm_memory_grow(0, pages);            /* no malloc here: take fresh pages from the host */
+    int pg = -1;
+#ifndef NO_HEAP
+    while (pages > 0 && (pg = __builtin_wasm_memory_grow(0, pages)) < 0) pages /= 2;     /* no malloc here: take fresh pages from the host */
+#endif
     heap = pg < 0 ? 0 : (unsigned short *)((unsigned)pg * 65536u);
 #else
     static unsigned short host_heap[200000];
@@ -712,43 +715,62 @@ static unsigned tint565(unsigned c, int tint)
     return (unsigned)((r << 11) | (g << 5) | b);
 }
 
-static const unsigned short *get_art(int id, int flip, int tint)
+static unsigned short scratch[6144];                          /* fallback when the grown heap is missing, full or refused: decoded again for every draw */
+static int heap_bad;
+
+static void decode_art(const Art *a, int flip, int tint, unsigned short *d)
 {
-    if (!heap) return 0;
+    unsigned short pal[16];
+    for (int i = 0; i < 16; i++) pal[i] = (unsigned short)(tint ? tint565(a->pal[i], tint) : a->pal[i]);
+    if (!a->opaque) pal[15] = (unsigned short)floor_key;
+    int w = a->w, h = a->h;
+    const unsigned char *src = a->px;
+    for (int y = 0; y < h; y++) {
+        unsigned short *row = d + y * w;
+        for (int x = 0; x < w; x += 2) {
+            unsigned char v = *src++;
+            if (flip) { row[w - 1 - x] = pal[v >> 4]; row[w - 2 - x] = pal[v & 15]; }
+            else { row[x] = pal[v >> 4]; row[x + 1] = pal[v & 15]; }
+        }
+    }
+}
+
+static const unsigned short *get_art(int id, int flip, int tint, int use_scratch)
+{
     const Art *a = &ARTS[id];
+    if (use_scratch || !heap || heap_bad) {
+        decode_art(a, flip, tint, scratch);
+        return scratch;
+    }
     Slot *s = &slots[id][flip][tint];
     unsigned key = a->opaque ? 0u : floor_key;
     if (!s->p) {
         unsigned n = (unsigned)a->w * a->h;
-        if (heap_ptr + n > heap_end) return 0;
+        if (heap_ptr + n > heap_end) { decode_art(a, flip, tint, scratch); return scratch; }
         s->p = heap_ptr; heap_ptr += n; s->key = ~0u;
     }
-    if (s->key != key) {
-        unsigned short pal[16];
-        for (int i = 0; i < 16; i++) pal[i] = (unsigned short)(tint ? tint565(a->pal[i], tint) : a->pal[i]);
-        if (!a->opaque) pal[15] = (unsigned short)floor_key;
-        int w = a->w, h = a->h;
-        const unsigned char *src = a->px;
-        unsigned short *d = s->p;
-        for (int y = 0; y < h; y++) {
-            unsigned short *row = d + y * w;
-            for (int x = 0; x < w; x += 2) {
-                unsigned char v = *src++;
-                if (flip) { row[w - 1 - x] = pal[v >> 4]; row[w - 2 - x] = pal[v & 15]; }
-                else { row[x] = pal[v >> 4]; row[x + 1] = pal[v & 15]; }
-            }
-        }
-        s->key = key;
-    }
+    if (s->key != key) { decode_art(a, flip, tint, s->p); s->key = key; }
     return s->p;
+}
+
+/* Blit decoded art.  If the host refuses a pointer into the grown memory, give up on the heap and use the static scratch buffer. */
+static void put_art(int id, int flip, int tint, int x, int y, int rows, int skip)
+{
+    const Art *a = &ARTS[id];
+    const unsigned short *p = get_art(id, flip, tint, 0);
+    if (meos_display_blit(x, y, a->w, rows, p + skip * a->w, 1) < 0 && p != scratch) {
+        heap_bad = 1;
+        p = get_art(id, flip, tint, 1);
+        meos_display_blit(x, y, a->w, rows, p + skip * a->w, 1);
+    }
 }
 
 static void blit_art(int id, int flip, int tint, int x, int y, int scale)      /* (x, y) in screen coordinates */
 {
     const Art *a = &ARTS[id];
-    if (x < 0 || y < 0 || x + a->w * scale > SW || y + a->h * scale > SH) return;
-    const unsigned short *p = get_art(id, flip, tint);
-    if (p) meos_display_blit(x, y, a->w, a->h, p, scale);
+    (void)scale;
+    if (x < 0 || y < 0 || x + a->w > SW || y + a->h > SH) return;
+    put_art(id, flip, tint, x, y, a->h, 0);
 }
 
 static void draw_tile(char c, int x, int y)
@@ -847,8 +869,7 @@ static void draw_character(int base, int dir, int tint, int x, int y, int hit_h,
     int rows = a->h - cut;
     if (ytop + cut + OY + rows > SH) rows = SH - (ytop + cut + OY);       /* leaving through the bottom edge: draw what is still on the screen */
     if (rows <= 0) return;
-    const unsigned short *p = get_art(id, flip, tint);
-    if (p) meos_display_blit(x, ytop + cut + OY, a->w, rows, p + cut * a->w, 1);
+    put_art(id, flip, tint, x, ytop + cut + OY, rows, cut);
 }
 
 static void draw_enemy(Enemy *e)
